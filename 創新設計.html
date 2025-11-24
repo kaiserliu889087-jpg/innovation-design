@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>風脈種子 Wind Pulse Seed - 機構與互動升級版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: 'Noto Sans TC', sans-serif; }
+        #canvas-container { width: 100%; height: 100vh; display: block; cursor: grab; }
+        #canvas-container:active { cursor: grabbing; }
+        
+        /* HUD 資訊顯示區 - 升級版 */
+        #hud {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            color: rgba(255, 255, 255, 0.9);
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #hud h1 { margin: 0; font-size: 20px; letter-spacing: 2px; text-transform: uppercase; opacity: 0.7; }
+        
+        .hud-panel {
+            background: rgba(20, 20, 25, 0.6);
+            border-left: 3px solid #fff;
+            backdrop-filter: blur(8px);
+            border-radius: 0 12px 12px 0;
+            padding: 15px;
+            width: 300px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            transition: border-color 0.3s;
+        }
+
+        .data-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+        .label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        .value { font-size: 18px; font-weight: bold; font-family: monospace; }
+        
+        #nci-graph {
+            width: 100%;
+            height: 60px;
+            background: rgba(0,0,0,0.2);
+            margin-top: 10px;
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
+        }
+        #nci-canvas { width: 100%; height: 100%; }
+
+        #status-indicator {
+            font-size: 13px;
+            color: #ccc;
+            line-height: 1.4;
+            margin-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            padding-top: 8px;
+        }
+
+        /* 互動提示 */
+        #interaction-hint {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 14px;
+        }
+
+        /* 麥克風按鈕 */
+        #mic-btn {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            padding: 12px 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            border-radius: 30px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(4px);
+            font-size: 14px;
+            z-index: 100;
+        }
+        #mic-btn:hover { background: rgba(255, 255, 255, 0.25); }
+        #mic-btn.active { background: #4CAF50; border-color: #4CAF50; color: white; }
+
+        /* 載入畫面 */
+        #loader {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #111;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #888;
+            z-index: 999;
+            transition: opacity 0.5s;
+        }
+        .loader-bar { width: 200px; height: 2px; background: #333; margin-top: 10px; overflow: hidden; }
+        .loader-progress { width: 0%; height: 100%; background: #fff; animation: load 2s ease-out forwards; }
+        @keyframes load { 0% { width: 0%; } 100% { width: 100%; } }
+    </style>
+    
+    <!-- Three.js & Libs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simplex-noise/2.4.0/simplex-noise.min.js"></script>
+</head>
+<body>
+
+    <div id="loader">
+        <div>Wind Pulse Seed System Loading...</div>
+        <div class="loader-bar"><div class="loader-progress"></div></div>
+    </div>
+
+    <div id="canvas-container"></div>
+    
+    <div id="interaction-hint">長按已切換至隱密監測模式</div>
+
+    <div id="hud">
+        <h1>Wind Pulse Seed <span style="font-size:10px; color:#666;">v2.0</span></h1>
+        <div class="hud-panel" id="main-panel">
+            <div class="data-row">
+                <span class="label">Noise Comfort Index</span>
+                <span class="value" id="nci-value">0</span>
+            </div>
+            <div class="data-row">
+                <span class="label">Current Mode</span>
+                <span class="value" id="mode-value" style="color:#ffeebb">AUTO</span>
+            </div>
+            
+            <div id="nci-graph">
+                <canvas id="nci-canvas"></canvas>
+            </div>
+
+            <div id="status-indicator">
+                正在分析環境音頻...<br>
+                <span style="color:#666; font-size: 11px;">Tip: 點擊底座切換模式，長按關閉燈光</span>
+            </div>
+        </div>
+    </div>
+
+    <button id="mic-btn">開啟麥克風 (真實環境偵測)</button>
+
+    <script>
+        // ==========================================
+        // 1. 系統變數與初始化
+        // ==========================================
+        let scene, camera, renderer;
+        let clock = new THREE.Clock();
+        let simplex = new SimplexNoise();
+        
+        // 3D 物件
+        let seedGroup, baseMesh, internalGroup;
+        let grassBlades = [];
+        let cityGroup;
+        
+        // 互動 Raycaster
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let isHoveringBase = false;
+        let pressTimer = null;
+        let isLongPress = false;
+        
+        // 核心狀態參數
+        const params = {
+            nci: 10,        // Noise Comfort Index (0-100)
+            mode: 'Auto',   // Auto, Calm, Eco
+            stealth: false, // 是否關閉燈光/動態 (長按觸發)
+            
+            // CMF
+            baseColor: '#d0c8b6',
+            grassColor: '#e8e8e0',
+            shellOpacity: 1.0,
+            transparent: false
+        };
+
+        // 訊號處理
+        let targetNCI = 10;
+        let smoothedNCI = 10;
+        let nciHistory = new Array(50).fill(10); // 歷史數據供圖表使用
+        let isShocked = false;
+        let shockTimer = 0;
+        
+        // Audio
+        let audioContext, analyser, dataArray;
+        let isMicActive = false;
+
+        // 色彩定義
+        const colors = {
+            base: { sand: 0xd0c8b6, grey: 0x9e9e9e, dark: 0x4a4a4a },
+            light: {
+                comfort: new THREE.Color(0xffeebb), // L1
+                neutral: new THREE.Color(0xffffff), // L2
+                stress: new THREE.Color(0xcceeff),  // L3
+                shock: new THREE.Color(0xff3333),   // L4
+                soothe: new THREE.Color(0x44ffaa),  // 安撫
+                off: new THREE.Color(0x000000)      // 關閉
+            }
+        };
+
+        // ==========================================
+        // 2. 場景與物件建構
+        // ==========================================
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+            scene.fog = new THREE.FogExp2(0x1a1a1a, 0.02);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 3.5, 7.5);
+            camera.lookAt(0, 1.2, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 燈光
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.7); 
+            scene.add(ambientLight);
+            
+            const mainSpot = new THREE.SpotLight(0xffeebb, 1.0);
+            mainSpot.position.set(5, 8, 5);
+            mainSpot.castShadow = true;
+            mainSpot.shadow.mapSize.width = 2048;
+            mainSpot.shadow.mapSize.height = 2048;
+            scene.add(mainSpot);
+
+            const rimLight = new THREE.DirectionalLight(0xaaccff, 0.4);
+            rimLight.position.set(-5, 2, -5);
+            scene.add(rimLight);
+
+            // 建構場景
+            createEnvironment();
+            createSeedDevice(); // 包含新機構
+            
+            // 互動與 GUI
+            setupInteraction();
+            setupGUI();
+            
+            // 啟動 NCI 圖表繪製
+            initGraph();
+
+            // 移除 Loader
+            setTimeout(() => {
+                document.getElementById('loader').style.opacity = 0;
+                setTimeout(() => document.getElementById('loader').style.display = 'none', 500);
+            }, 1500);
+
+            animate();
+        }
+
+        function createEnvironment() {
+            // 桌子
+            const desk = new THREE.Mesh(
+                new THREE.BoxGeometry(30, 0.5, 20),
+                new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.6 })
+            );
+            desk.position.y = -0.25;
+            desk.receiveShadow = true;
+            scene.add(desk);
+
+            // 窗外城市 (簡化版)
+            cityGroup = new THREE.Group();
+            const bGeo = new THREE.BoxGeometry(1,1,1);
+            const bMat = new THREE.MeshBasicMaterial({ color: 0x111820, transparent: true, opacity: 0.8 });
+            
+            for(let i=0; i<40; i++) {
+                const m = new THREE.Mesh(bGeo, bMat);
+                m.position.set((Math.random()-0.5)*40, Math.random()*5+2, -12 - Math.random()*10);
+                m.scale.set(1+Math.random()*3, 5+Math.random()*15, 1+Math.random()*3);
+                cityGroup.add(m);
+            }
+            scene.add(cityGroup);
+        }
+
+        // --- 核心產品建構 (機構升級) ---
+        function createSeedDevice() {
+            seedGroup = new THREE.Group();
+            scene.add(seedGroup);
+
+            // 1. 外殼 (Shell)
+            // 紋理生成
+            const cvs = document.createElement('canvas');
+            cvs.width = 256; cvs.height = 256;
+            const ctx = cvs.getContext('2d');
+            ctx.fillStyle = '#d0c8b6'; ctx.fillRect(0,0,256,256);
+            for(let i=0; i<8000; i++) {
+                ctx.fillStyle = Math.random()>0.5 ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.15)';
+                ctx.fillRect(Math.random()*256, Math.random()*256, 2, 2);
+            }
+            const stoneTex = new THREE.CanvasTexture(cvs);
+
+            const shellGeo = new THREE.SphereGeometry(1.2, 64, 64);
+            shellGeo.scale(1, 1.15, 0.95); // 有機石頭形狀
+            
+            const shellMat = new THREE.MeshPhysicalMaterial({
+                color: params.baseColor,
+                map: stoneTex,
+                roughness: 0.7,
+                metalness: 0.1,
+                transmission: 0, // 預設不透明
+                opacity: 1,
+                transparent: true
+            });
+
+            baseMesh = new THREE.Mesh(shellGeo, shellMat);
+            baseMesh.position.y = 1.15;
+            baseMesh.castShadow = true;
+            baseMesh.receiveShadow = true;
+            baseMesh.name = "BaseShell"; // 用於 Raycasting
+            seedGroup.add(baseMesh);
+
+            // 2. 內部機構 (Internal Mechanics - 透視模式可見)
+            internalGroup = new THREE.Group();
+            baseMesh.add(internalGroup);
+            internalGroup.visible = false;
+
+            // [A] 驅動馬達與偏心輪 (Drive Core)
+            const motorBody = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.25, 0.25, 0.6, 16),
+                new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8, roughness: 0.3 })
+            );
+            motorBody.rotation.z = Math.PI / 2;
+            motorBody.position.y = -0.3;
+            internalGroup.add(motorBody);
+
+            const eccentricWheel = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.15, 0.15, 0.1, 16),
+                new THREE.MeshStandardMaterial({ color: 0xaaaaaa })
+            );
+            eccentricWheel.position.set(0.3, -0.3, 0); // 偏離馬達中心
+            eccentricWheel.rotation.z = Math.PI / 2;
+            internalGroup.add(eccentricWheel);
+
+            // [B] 光學模組 (Optical Core)
+            const ledCore = new THREE.Mesh(
+                new THREE.SphereGeometry(0.15, 16, 16),
+                new THREE.MeshBasicMaterial({ color: 0xffffee })
+            );
+            ledCore.position.y = 0.1;
+            internalGroup.add(ledCore);
+
+            const fiberBundle = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.4, 0.1, 0.5, 16, 1, true),
+                new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3, side: THREE.DoubleSide })
+            );
+            fiberBundle.position.y = 0.4; // 連接到草束底部
+            internalGroup.add(fiberBundle);
+            
+            // 內部光源 (照亮內部結構)
+            const internalLight = new THREE.PointLight(0xffaa00, 0, 1.5);
+            internalLight.name = "InternalPointLight";
+            internalGroup.add(internalLight);
+
+            // [C] 感測模組 (Sensor Module)
+            // 指向性麥克風 - 朝向窗外 (Z 軸負向)
+            const micModule = new THREE.Group();
+            const micBody = new THREE.Mesh(
+                new THREE.BoxGeometry(0.2, 0.2, 0.3),
+                new THREE.MeshStandardMaterial({ color: 0x333333 })
+            );
+            const micGrill = new THREE.Mesh(
+                new THREE.CircleGeometry(0.08, 16),
+                new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 1 })
+            );
+            micGrill.position.z = -0.16;
+            micModule.add(micBody);
+            micModule.add(micGrill);
+            micModule.position.set(0, -0.6, -0.8); // 靠近底座後方
+            micModule.lookAt(0, -0.6, -10); // 指向外面
+            internalGroup.add(micModule);
+
+            // [D] AI 控制板 (PCB)
+            const pcb = new THREE.Mesh(
+                new THREE.BoxGeometry(0.6, 0.05, 0.4),
+                new THREE.MeshStandardMaterial({ color: 0x004400, roughness: 0.5 })
+            );
+            pcb.position.set(0, -0.8, 0);
+            internalGroup.add(pcb);
+            // 小晶片
+            const chip = new THREE.Mesh(
+                new THREE.BoxGeometry(0.2, 0.05, 0.2),
+                new THREE.MeshStandardMaterial({ color: 0x111111 })
+            );
+            chip.position.y = 0.06;
+            pcb.add(chip);
+
+
+            // 3. 草束 (Wind Filaments)
+            const grassCount = 70;
+            const grassMat = new THREE.MeshPhysicalMaterial({
+                color: params.grassColor,
+                emissive: 0x000000,
+                roughness: 0.4,
+                metalness: 0,
+                transmission: 0.1, // 輕微透光
+                thickness: 0.2
+            });
+
+            for(let i=0; i<grassCount; i++) {
+                const h = 2.8 + Math.random() * 1.5;
+                // 使用圓柱模擬光纖管
+                const gGeo = new THREE.CylinderGeometry(0.015, 0.025, h, 6);
+                gGeo.translate(0, h/2, 0);
+                
+                const blade = new THREE.Mesh(gGeo, grassMat.clone());
+                
+                // 分佈在頂部開口
+                const r = Math.random() * 0.35;
+                const angle = Math.random() * Math.PI * 2;
+                blade.position.set(r*Math.cos(angle), 0.9, r*Math.sin(angle)); // 稍微埋入
+                
+                // 隨機傾角
+                blade.rotation.x = (Math.random()-0.5)*0.4;
+                blade.rotation.z = (Math.random()-0.5)*0.4;
+
+                blade.userData = {
+                    initRotX: blade.rotation.x,
+                    initRotZ: blade.rotation.z,
+                    height: h,
+                    phase: Math.random() * 100
+                };
+
+                baseMesh.add(blade);
+                grassBlades.push(blade);
+            }
+        }
+
+        // ==========================================
+        // 3. 互動邏輯 (Raycaster & Touch)
+        // ==========================================
+        function setupInteraction() {
+            const container = document.getElementById('canvas-container');
+
+            // Mouse Events
+            container.addEventListener('mousemove', onMouseMove);
+            container.addEventListener('mousedown', onInputStart);
+            container.addEventListener('mouseup', onInputEnd);
+            
+            // Touch Events
+            container.addEventListener('touchstart', (e) => {
+                // 轉換 touch 到 mouse 座標
+                const t = e.touches[0];
+                mouse.x = (t.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(t.clientY / window.innerHeight) * 2 + 1;
+                onInputStart(e);
+            }, {passive: false});
+            
+            container.addEventListener('touchend', onInputEnd);
+        }
+
+        function onMouseMove(event) {
+            event.preventDefault();
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        function onInputStart(event) {
+            // 檢查是否點擊到底座
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(baseMesh);
+
+            if (intersects.length > 0) {
+                // 開始計時 (長按判定)
+                isLongPress = false;
+                pressTimer = setTimeout(() => {
+                    isLongPress = true;
+                    toggleStealthMode();
+                }, 800); // 800ms 視為長按
+                
+                document.body.style.cursor = "grabbing";
+            }
+        }
+
+        function onInputEnd(event) {
+            if (pressTimer) {
+                clearTimeout(pressTimer);
+                pressTimer = null;
+                
+                // 如果不是長按，且剛剛有點擊到底座 -> 觸發短按 (切換模式)
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObject(baseMesh);
+                if (intersects.length > 0 && !isLongPress) {
+                    cycleMode();
+                }
+            }
+            document.body.style.cursor = "default";
+        }
+
+        function cycleMode() {
+            if (params.stealth) {
+                // 如果在隱身模式，點擊喚醒
+                toggleStealthMode();
+                return;
+            }
+
+            const modes = ['Auto', 'Calm', 'Eco'];
+            const currentIdx = modes.indexOf(params.mode);
+            const nextIdx = (currentIdx + 1) % modes.length;
+            params.mode = modes[nextIdx];
+            
+            showHint(`已切換至: ${params.mode} Mode`);
+            updateGUI(); // 同步 GUI
+        }
+
+        function toggleStealthMode() {
+            params.stealth = !params.stealth;
+            const hint = document.getElementById('interaction-hint');
+            
+            if (params.stealth) {
+                hint.innerText = "長按：進入隱密監測模式 (燈光關閉)";
+            } else {
+                hint.innerText = "系統喚醒";
+            }
+            
+            hint.style.opacity = 1;
+            setTimeout(() => hint.style.opacity = 0, 2000);
+        }
+
+        function showHint(msg) {
+            const hint = document.getElementById('interaction-hint');
+            hint.innerText = msg;
+            hint.style.opacity = 1;
+            setTimeout(() => hint.style.opacity = 0, 1500);
+        }
+
+
+        // ==========================================
+        // 4. NCI 計算與動畫核心
+        // ==========================================
+        function updateNoiseAnalysis() {
+            // 1. 取得音源
+            let inputNoise = 0;
+            
+            if (isMicActive && analyser) {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0; 
+                for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+                inputNoise = Math.min(100, (sum / dataArray.length) / 1.8);
+            } else {
+                // 模擬噪音波形 (疊加多個波)
+                const t = clock.getElapsedTime();
+                let n = simplex.noise2D(t * 0.2, 0) * 0.5 + 0.5; // 低頻
+                n += simplex.noise2D(t * 1.5, 100) * 0.2; // 高頻
+                if (Math.random() > 0.99) n += 0.8; // 偶發脈衝
+                inputNoise = Math.min(100, n * 60);
+            }
+
+            // 2. 根據模式過濾
+            if (params.mode === 'Calm') targetNCI = 15; // 強制安撫
+            else if (params.mode === 'Eco') targetNCI = inputNoise * 0.5; // 省電減弱反應
+            else targetNCI = inputNoise; // Auto
+
+            // 3. 平滑化 (AI 運算模擬)
+            smoothedNCI += (targetNCI - smoothedNCI) * 0.08;
+            params.nci = smoothedNCI;
+
+            // 4. 更新歷史圖表數據
+            nciHistory.push(smoothedNCI);
+            nciHistory.shift();
+
+            // 5. 判斷驚嚇
+            if (params.nci > 85 && !isShocked) {
+                isShocked = true;
+                shockTimer = clock.getElapsedTime();
+            }
+        }
+
+        function updateDeviceVisuals(time) {
+            // 狀態顏色決定
+            let lightColor = colors.light.neutral;
+            let statusText = "";
+            let borderColor = "#fff";
+
+            if (params.stealth) {
+                lightColor = colors.light.off;
+                statusText = "隱密監測中...";
+                borderColor = "#333";
+            } else if (isShocked) {
+                const elapsed = time - shockTimer;
+                if (elapsed < 2.0) {
+                    lightColor = colors.light.shock;
+                    statusText = "⚠️ 突發噪音偵測";
+                    borderColor = "#ff3333";
+                } else {
+                    lightColor = colors.light.soothe;
+                    statusText = "🛡️ 深度安撫引導";
+                    borderColor = "#44ffaa";
+                    if (params.nci < 60 && elapsed > 8.0) isShocked = false;
+                }
+            } else {
+                if (params.nci < 30) {
+                    lightColor = colors.light.comfort;
+                    statusText = "舒適 Comfort";
+                    borderColor = "#ffeebb";
+                } else if (params.nci < 65) {
+                    lightColor = colors.light.neutral;
+                    statusText = "可接受 Acceptable";
+                    borderColor = "#ffffff";
+                } else {
+                    lightColor = colors.light.stress;
+                    statusText = "高壓 High Stress";
+                    borderColor = "#88ccff";
+                }
+            }
+
+            // 更新 HUD
+            document.getElementById('nci-value').innerText = Math.round(params.nci);
+            document.getElementById('status-indicator').innerHTML = 
+                `狀態: ${statusText}<br><span style='color:#666; font-size:10px;'>${params.stealth ? 'Stealth Mode Active' : 'System Active'}</span>`;
+            document.querySelector('.hud-panel').style.borderLeftColor = borderColor;
+            document.getElementById('mode-value').innerText = params.mode.toUpperCase();
+
+            // --- 動畫邏輯 ---
+            const windIntensity = params.nci / 100;
+
+            grassBlades.forEach((blade, i) => {
+                if (params.stealth) {
+                    // 隱密模式：停止擺動，關閉發光
+                    blade.rotation.x += (blade.userData.initRotX - blade.rotation.x) * 0.05;
+                    blade.rotation.z += (blade.userData.initRotZ - blade.rotation.z) * 0.05;
+                    blade.material.emissiveIntensity = 0;
+                } else {
+                    // 正常模式
+                    // 計算風力擺動
+                    const nX = simplex.noise2D(i, time * (0.5 + windIntensity));
+                    const nZ = simplex.noise2D(i+100, time * (0.5 + windIntensity));
+                    
+                    let tX = blade.userData.initRotX + nX * (0.1 + windIntensity * 0.6);
+                    let tZ = blade.userData.initRotZ + nZ * (0.1 + windIntensity * 0.6);
+
+                    // 特殊動畫 (驚嚇縮起來 -> 呼吸張開)
+                    if (isShocked) {
+                        const e = time - shockTimer;
+                        if (e < 2.0) {
+                            tX *= 0.1; tZ *= 0.1; // 縮
+                        } else {
+                            const breath = (Math.sin(time) + 1) * 0.15; // 呼吸
+                            tX += Math.sign(tX) * breath;
+                            tZ += Math.sign(tZ) * breath;
+                        }
+                    }
+
+                    blade.rotation.x += (tX - blade.rotation.x) * 0.1;
+                    blade.rotation.z += (tZ - blade.rotation.z) * 0.1;
+
+                    // 光纖效果 (Emissive)
+                    // 模擬光從底部往上傳導 (Pulse effect)
+                    const pulseSpeed = isShocked ? 1.0 : (0.5 + windIntensity);
+                    const pulsePhase = (time * pulseSpeed + blade.userData.phase) % 2; // 0-2
+                    let brightness = Math.max(0, 1 - Math.abs(pulsePhase - 1)); // Triangle wave
+                    
+                    // 混合 NCI 強度
+                    brightness = 0.2 + brightness * 0.8;
+                    if (params.mode === 'Eco') brightness *= 0.3;
+
+                    blade.material.emissive.lerp(lightColor, 0.1);
+                    blade.material.emissiveIntensity = brightness;
+                }
+            });
+
+            // 內部燈光 (透視時)
+            if (internalGroup.visible && !params.stealth) {
+                const iLight = internalGroup.getObjectByName("InternalPointLight");
+                iLight.color.lerp(lightColor, 0.1);
+                iLight.intensity = 2 + params.nci / 20;
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+
+            // 1. 互動檢測 (Hover 效果)
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(baseMesh);
+            if (intersects.length > 0) {
+                if (!isHoveringBase) {
+                    // Hover In
+                    new TWEEN_Simple(baseMesh.scale, {x:1.02, y:1.17, z:0.97}, 300);
+                    isHoveringBase = true;
+                }
+            } else {
+                if (isHoveringBase) {
+                    // Hover Out
+                    new TWEEN_Simple(baseMesh.scale, {x:1, y:1.15, z:0.95}, 300);
+                    isHoveringBase = false;
+                }
+            }
+
+            // 2. 邏輯更新
+            updateNoiseAnalysis();
+            updateDeviceVisuals(time);
+            drawGraph();
+
+            // 3. 透視控制
+            if (params.transparent) {
+                baseMesh.material.opacity = 0.3;
+                baseMesh.material.transparent = true;
+                internalGroup.visible = true;
+            } else {
+                baseMesh.material.opacity += (1.0 - baseMesh.material.opacity) * 0.1;
+                if (baseMesh.material.opacity > 0.95) {
+                    baseMesh.material.opacity = 1.0;
+                    baseMesh.material.transparent = false;
+                    internalGroup.visible = false;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // ==========================================
+        // 5. HUD 圖表繪製 (Canvas)
+        // ==========================================
+        let ctxGraph;
+        function initGraph() {
+            const c = document.getElementById('nci-canvas');
+            c.width = c.offsetWidth;
+            c.height = c.offsetHeight;
+            ctxGraph = c.getContext('2d');
+        }
+
+        function drawGraph() {
+            if (!ctxGraph) return;
+            const w = ctxGraph.canvas.width;
+            const h = ctxGraph.canvas.height;
+            
+            ctxGraph.clearRect(0, 0, w, h);
+            
+            // 畫線
+            ctxGraph.beginPath();
+            ctxGraph.strokeStyle = params.stealth ? '#444' : '#fff';
+            ctxGraph.lineWidth = 2;
+            
+            const step = w / (nciHistory.length - 1);
+            
+            for(let i=0; i<nciHistory.length; i++) {
+                const val = nciHistory[i];
+                const y = h - (val / 100) * h; // 0在下, 100在上
+                if (i===0) ctxGraph.moveTo(0, y);
+                else ctxGraph.lineTo(i * step, y);
+            }
+            ctxGraph.stroke();
+
+            // 畫填充
+            ctxGraph.lineTo(w, h);
+            ctxGraph.lineTo(0, h);
+            ctxGraph.fillStyle = params.stealth ? 'rgba(100,100,100,0.1)' : 'rgba(255,255,255,0.1)';
+            ctxGraph.fill();
+        }
+
+        // ==========================================
+        // 6. 工具函式
+        // ==========================================
+        function setupGUI() {
+            const gui = new dat.GUI({ autoPlace: false });
+            gui.domElement.style.position = 'absolute';
+            gui.domElement.style.top = '10px';
+            gui.domElement.style.right = '10px';
+            document.body.appendChild(gui.domElement);
+
+            const f1 = gui.addFolder('Control 模擬控制');
+            f1.add(params, 'mode', ['Auto', 'Calm', 'Eco']).listen();
+            f1.add(params, 'stealth').name('隱密模式 (Stealth)').listen();
+            f1.open();
+
+            const f2 = gui.addFolder('Appearance 外觀');
+            f2.add(params, 'transparent').name('透視結構');
+            f2.addColor(params, 'baseColor').name('底座顏色');
+        }
+
+        // 簡易麥克風啟動
+        document.getElementById('mic-btn').addEventListener('click', async function() {
+            if (!isMicActive) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioContext.createAnalyser();
+                    const src = audioContext.createMediaStreamSource(stream);
+                    src.connect(analyser);
+                    analyser.fftSize = 256;
+                    dataArray = new Uint8Array(analyser.frequencyBinCount);
+                    isMicActive = true;
+                    this.innerText = "麥克風運行中...";
+                    this.classList.add('active');
+                } catch(e) {
+                    alert("無法存取麥克風");
+                }
+            }
+        });
+
+        class TWEEN_Simple {
+            constructor(target, to, duration) {
+                const start = {};
+                for(let k in to) start[k] = target[k];
+                const startTime = Date.now();
+                
+                function up() {
+                    const now = Date.now();
+                    let p = (now - startTime) / duration;
+                    if (p > 1) p = 1;
+                    // Easing
+                    p = p * (2 - p); 
+
+                    for(let k in to) {
+                        target[k] = start[k] + (to[k] - start[k]) * p;
+                    }
+                    if (p < 1) requestAnimationFrame(up);
+                }
+                up();
+            }
+        }
+        
+        // Resize Handle
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            initGraph();
+        });
+
+        init();
+
+    </script>
+</body>
+</html>
